@@ -19,4 +19,6 @@ COPY ./src/entrypoint.sh ./src/backup.sh /root/
 RUN chmod a+x /root/entrypoint.sh /root/backup.sh
 
 WORKDIR /root
+ENTRYPOINT [ "/bin/sh", "-c" ]
 CMD [ "/root/entrypoint.sh" ]
+

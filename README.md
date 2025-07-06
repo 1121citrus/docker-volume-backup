@@ -1,4 +1,8 @@
-# docker-volume-backup
+# 1121citrus/docker-volume-backup
+
+**This is a fork of [`jareware/docker-volume-backup`](https://www.github.com/jareware/docker-volume-backup).** It adds support for passing credentials and private keys using [secrets](https://docs.docker.com/engine/swarm/secrets/#use-secrets-in-compose).
+
+## Overview
 
 Docker image for performing simple backups of Docker volumes. Main features:
 
@@ -11,114 +15,67 @@ Docker image for performing simple backups of Docker volumes. Main features:
 - Optionally executes commands before/after backing up inside `docker-volume-backup` container and/or on remote host
 - Optionally ships backup metrics to [InfluxDB](https://docs.influxdata.com/influxdb/), for monitoring
 - Optionally encrypts backups with `gpg` before uploading
+- Supports [secrets](https://docs.docker.com/engine/swarm/secrets/#use-secrets-in-compose) files for security tokens.
 
 ## Examples
 
 ### Backing up locally
 
-Say you're running some dashboards with [Grafana](https://grafana.com/) and want to back them up:
-
 ```yml
-version: "3"
-
 services:
-
-  dashboard:
-    image: grafana/grafana:7.4.5
-    volumes:
-      - grafana-data:/var/lib/grafana           # This is where Grafana keeps its data
-
   backup:
-    image: jareware/docker-volume-backup
+    image: 1121citrus/docker-volume-backup
     volumes:
-      - grafana-data:/backup/grafana-data:ro    # Mount the Grafana data volume (as read-only)
-      - ./backups:/archive                      # Mount a local folder as the backup archive
-
-volumes:
-  grafana-data:
+      # Local folder to be backed up
+      - ./application-data:/backup/application-data:ro
+      # Local folder as the backup directory
+      - ./backups:/archive
 ```
 
-This will back up the Grafana data volume, once per day, and write it to `./backups` with a filename like `backup-2018-11-27T16-51-56.tar.gz`.
+This will back up the `./application-data` directory contents, once per day, and write it to `./backups` with a filename like `17760708T12000-backup.tar.gz`.
 
 ### Backing up to S3
 
 Off-site backups are better, though:
 
 ```yml
-version: "3"
-
 services:
-
-  dashboard:
-    image: grafana/grafana:7.4.5
-    volumes:
-      - grafana-data:/var/lib/grafana           # This is where Grafana keeps its data
-
   backup:
-    image: jareware/docker-volume-backup
+    image: 1121citrus/docker-volume-backup
     environment:
-      AWS_S3_BUCKET_NAME: my-backup-bucket      # S3 bucket which you own, and already exists
-      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}   # Read AWS secrets from environment (or a .env file)
-      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
+      AWS_S3_BUCKET_NAME: my-backup-bucket # Bucket already exists
+      AWS_ACCESS_KEY_ID_FILE: /run/secrets/aws_access_key_id
+      AWS_SECRET_ACCESS_KEY_FILE: /run/secrets/aws_secret_access_key
     volumes:
-      - grafana-data:/backup/grafana-data:ro    # Mount the Grafana data volume (as read-only)
-
-volumes:
-  grafana-data:
+      # Local folder to be backed up
+      - ./application-data:/backup/application-data:ro
+    secrets:
+      - aws_access_key_id
+      - aws_secret_access_key
 ```
 
 This configuration will back up to AWS S3 instead. See below for additional tips about [S3 Bucket setup](#s3-bucket-setup).
 
-### Restoring from S3
-
-Downloading backups from S3 can be done however you usually interact with S3, e.g. via the `aws s3` CLI or the AWS Web Console.
-
-However, if you're on the host that's running this image, you can also download the latest backup with:
-
-```
-$ docker-compose exec -T backup bash -c 'aws s3 cp s3://$AWS_S3_BUCKET_NAME/$BACKUP_FILENAME -' > restore.tar.gz
-```
-
-From here on out the restore process will depend on a variety of things, like whether you've encrypted the backups, how your volumes are configured, and what application it is exactly that you're restoring.
-
-But for the sake of example, to finish the restore for the above Grafana setup, you would:
-
-1. Extract the contents of the backup, with e.g. `tar -xf restore.tar.gz`. This would leave you with a new directory called `backup` in the current dir.
-1. Figure out the mount point of the `grafana-data` volume, with e.g. `docker volume ls` and then `docker volume inspect`. Let's say it ends up being `/var/lib/docker/volumes/bla-bla/_data`. This is where your live Grafana keeps its data on the host file system.
-1. Stop Grafana, with `docker-compose stop dashboard`.
-1. Move any existing data aside, with e.g. `sudo mv /var/lib/docker/volumes/bla-bla/_data{,_replaced_during_restore}`. You can also just remove it, if you like to live dangerously.
-1. Move the backed up data to where the live Grafana can find it, with e.g. `sudo cp -r backup/grafana-data /var/lib/docker/volumes/bla-bla/_data`.
-1. Depending on the Grafana version, [you may need to set some permissions manually](http://docs.grafana.org/installation/docker/#migration-from-a-previous-version-of-the-docker-container-to-5-1-or-later), e.g. `sudo chown -R 472:472 /var/lib/docker/volumes/bla-bla/_data`.
-1. Start Grafana back up, with `docker-compose start dashboard`. Your Grafana instance should now have travelled back in time to its latest backup.
-
 ### Backing up to remote host by means of SCP
 
-You can also upload to your backups to a remote host by means of secure copy (SCP) based on SSH. To do so, [create an SSH key pair if you do not have one yet and copy the public key to the remote host where your backups should be stored.](https://foofunc.com/how-to-create-and-add-ssh-key-in-remote-ssh-server/) Then, start the backup container by setting the variables `SCP_HOST`, `SCP_USER`, `SCP_DIRECTORY`, and provide the private SSH key by mounting it into `/ssh/id_rsa`.
+You can also upload to your backups to a remote host by means of secure copy (SCP) based on SSH. To do so, [create an SSH key pair if you do not have one yet and copy the public key to the remote host where your backups should be stored.](https://foofunc.com/how-to-create-and-add-ssh-key-in-remote-ssh-server/) Then, start the backup container by setting the variables `SCP_HOST`, `SCP_USER`, `SCP_DIRECTORY`, and `SSH_KEY_FILE` (or provide the private SSH key by mounting it into `/ssh/id_rsa`).
 
 In the example, we store the backups in the remote host folder `/home/pi/backups` and use the default SSH key located at `~/.ssh/id_rsa`:
 
 ```yml
-version: "3"
-
 services:
-
-  dashboard:
-    image: grafana/grafana:7.4.5
-    volumes:
-      - grafana-data:/var/lib/grafana           # This is where Grafana keeps its data
-
   backup:
-    image: jareware/docker-volume-backup
+    image: 1121citrus/docker-volume-backup
     environment:
-      SCP_HOST: 192.168.0.42                    # Remote host IP address
-      SCP_USER: pi                              # Remote host user to log in
-      SCP_DIRECTORY: /home/pi/backups           # Remote host directory
+      SCP_HOST: backup.acme-explosives.com
+      SCP_USER: pi
+      SCP_DIRECTORY: /home/pi/backups # Remote host directory
+      SSH_KEY_FILE: /run/secrets/ssh_private_key
     volumes:
-      - grafana-data:/backup/grafana-data:ro    # Mount the Grafana data volume (as read-only)
-      - ~/.ssh/id_rsa:/ssh/id_rsa:ro            # Mount the SSH private key (as read-only)
-
-volumes:
-  grafana-data:
+      # Local folder to be backed up
+      - ./application-data:/backup/application-data:ro
+    secrets:
+      - ssh_private_key
 ```
 
 ### Triggering a backup manually
@@ -156,27 +113,29 @@ It's not generally safe to read files to which other processes might be writing.
 You can give the backup container access to the Docker socket, and label any containers that need to be stopped while the backup runs:
 
 ```yml
-version: "3"
-
 services:
-
   dashboard:
-    image: grafana/grafana:7.4.5
+    image: grafana/grafana
     volumes:
-      - grafana-data:/var/lib/grafana           # This is where Grafana keeps its data
+      - grafana-data:/var/lib/grafana
     labels:
-      # Adding this label means this container should be stopped while it's being backed up:
+      # Adding this label means this container should be
+      # stopped while it's being backed up:
       - "docker-volume-backup.stop-during-backup=true"
 
   backup:
-    image: jareware/docker-volume-backup
+    image: 1121citrus/docker-volume-backup
     environment:
-      AWS_S3_BUCKET_NAME: my-backup-bucket      # S3 bucket which you own, and already exists
-      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}   # Read AWS secrets from environment (or a .env file)
-      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
+      AWS_S3_BUCKET_NAME: my-backup-bucket
+      AWS_ACCESS_KEY_ID_FILE: /run/secrets/aws_access_key_id
+      AWS_SECRET_ACCESS_KEY_FILE: /run/secrets/aws_secret_access_key
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock:ro # Allow use of the "stop-during-backup" feature
-      - grafana-data:/backup/grafana-data:ro    # Mount the Grafana data volume (as read-only)
+      # Share Docker socket to use of the "stop-during-backup" feature
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - grafana-data:/backup/grafana-data:ro
+    secrets:
+      - aws_access_key_id
+      - aws_secret_access_key
 
 volumes:
   grafana-data:
@@ -189,26 +148,23 @@ This configuration allows you to safely back up things like databases, if you ca
 If you don't want to stop the container while it's being backed up, and the container comes with a backup utility (this is true for most databases), you can label the container with commands to run before/after backing it up:
 
 ```yml
-version: "3"
-
 services:
-
   database:
-    image: influxdb:1.5.4
+    image: influxdb
     volumes:
-      - influxdb-data:/var/lib/influxdb         # This is where InfluxDB keeps its data
-      - influxdb-temp:/tmp/influxdb             # This is our temp space for the backup
+      - influxdb-data:/var/lib/influxdb
+      - influxdb-temp:/tmp/influxdb
     labels:
-      # These commands will be exec'd (in the same container) before/after the backup starts:
+      # These commands will be exec'd (in the same container)
+      # before/after the backup starts:
       - docker-volume-backup.exec-pre-backup=influxd backup -portable /tmp/influxdb
       - docker-volume-backup.exec-post-backup=rm -rfv /tmp/influxdb
-
   backup:
-    image: jareware/docker-volume-backup
+    image: 1121citrus/docker-volume-backup
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro # Allow use of the "pre/post exec" feature
-      - influxdb-temp:/backup/influxdb:ro       # Mount the temp space so it gets backed up
-      - ./backups:/archive                      # Mount a local folder as the backup archive
+      - influxdb-temp:/backup/influxdb:ro # Temp space gets backed up
+      - ./backups:/archive # Local folder as backup directory
 
 volumes:
   influxdb-data:
@@ -227,7 +183,7 @@ Variable | Default | Notes
 --- | --- | ---
 `BACKUP_SOURCES` | `/backup` | Where to read data from. This can be a space-separated list if you need to back up multiple paths, when mounting multiple volumes for example. On the other hand, you can also just mount multiple volumes under `/backup` to have all of them backed up.
 `BACKUP_CRON_EXPRESSION` | `@daily` | Standard debian-flavored `cron` expression for when the backup should run. Use e.g. `0 4 * * *` to back up at 4 AM every night. See the [man page](http://man7.org/linux/man-pages/man8/cron.8.html) or [crontab.guru](https://crontab.guru/) for more.
-`BACKUP_FILENAME` | `backup-%Y-%m-%dT%H-%M-%S.tar.gz` | File name template for the backup file. Is passed through `date` for formatting. See the [man page](http://man7.org/linux/man-pages/man1/date.1.html) for more.
+`BACKUP_FILENAME` | `"%Y%m%dT%H%M%S-backup.tar.gz"` | File name template for the backup file. Is passed through `date` for formatting. See the [man page](http://man7.org/linux/man-pages/man1/date.1.html) for more.
 `BACKUP_ARCHIVE` | `/archive` | When this path is available within the container (i.e. you've mounted a Docker volume there), a finished backup file will get archived there after each run.
 `PRE_BACKUP_COMMAND` |  | Commands that is executed before the backup is created.
 `POST_BACKUP_COMMAND` |  | Commands that is executed after the backup has been transferred.
@@ -239,22 +195,28 @@ Variable | Default | Notes
 `CHECK_HOST` |  | When provided, the availability of the named host will be checked. The host should be the destination host of the backups. If the host is available, the backup is conducted as normal. Else, the backup is skipped.
 `AWS_S3_BUCKET_NAME` |  | When provided, the resulting backup file will be uploaded to this S3 bucket after the backup has ran. You may include slashes after the bucket name if you want to upload into a specific path within the bucket, e.g. `your-bucket-name/backups/daily`.
 `AWS_GLACIER_VAULT_NAME` |  | When provided, the resulting backup file will be uploaded to this AWS Glacier vault after the backup has ran.
-`AWS_ACCESS_KEY_ID` |  | Required when using `AWS_S3_BUCKET_NAME`.
-`AWS_SECRET_ACCESS_KEY` |  | Required when using `AWS_S3_BUCKET_NAME`.
+`AWS_ACCESS_KEY_ID` |  | Must supply `AWS_ACCESS_KEY_ID` or `AWS_ACCESS_KEY_ID_FILE` when using `AWS_S3_BUCKET_NAME`.
+`AWS_ACCESS_KEY_ID_FILE` |  | Must supply `AWS_ACCESS_KEY_ID` or `AWS_ACCESS_KEY_ID_FILE` when using `AWS_S3_BUCKET_NAME`.
+`AWS_SECRET_ACCESS_KEY` |  | Must supply `AWS_SECRET_ACCESS_KEY` or `AWS_SECRET_ACCESS_KEY_FILE` when using `AWS_S3_BUCKET_NAME`.
+`AWS_SECRET_ACCESS_KEY_FILE` |  | Must supply `AWS_SECRET_ACCESS_KEY` or `AWS_SECRET_ACCESS_KEY_FILE` when using `AWS_S3_BUCKET_NAME`.
 `AWS_DEFAULT_REGION` |  | Optional when using `AWS_S3_BUCKET_NAME`. Allows you to override the AWS CLI default region. Usually not needed.
 `AWS_EXTRA_ARGS` |  | Optional additional args for the AWS CLI. Useful for e.g. providing `--endpoint-url <url>` for S3-compatible systems, such as [DigitalOcean Spaces](https://www.digitalocean.com/products/spaces/), [MinIO](https://min.io/) and the like.
 `SCP_HOST` |  | When provided, the resulting backup file will be uploaded by means of `scp` to the host stated.
 `SCP_USER` |  | User name to log into `SCP_HOST`.
 `SCP_DIRECTORY` |  | Directory on `SCP_HOST` where backup file is stored.
-`PRE_SCP_COMMAND` |  | Commands that is executed on `SCP_HOST` before the backup is transferred.
-`POST_SCP_COMMAND` |  | Commands that is executed on `SCP_HOST` after the backup has been transferred.
+`SSH_KEY_FILE`| /ssh/id_rsa | Container pathspec for SSH private key
+`PRE_SCP_COMMAND` |  | Command that is executed on `SCP_HOST` before the backup is transferred.
+`POST_SCP_COMMAND` |  | Command that is executed on `SCP_HOST` after the backup has been transferred.
 `GPG_PASSPHRASE` |  | When provided, the backup will be encrypted with gpg using this `passphrase`.
+`GPG_PASSPHRASE_FILE` |  | When provided, the backup will be encrypted with gpg using the `passphrase` found in this file.
 `INFLUXDB_URL` |  | Required when sending metrics to InfluxDB.
 `INFLUXDB_MEASUREMENT` | `docker_volume_backup` | Required when sending metrics to InfluxDB.
 `INFLUXDB_API_TOKEN` | | When provided, backup metrics will be sent to an InfluxDB instance using the API token for authorization. If API Tokens are not supported by the InfluxDB version in use, `INFLUXDB_CREDENTIALS` must be provided instead.
+`INFLUXDB_API_TOKEN_FILE` | | When provided, backup metrics will be sent to an InfluxDB instance using the API token found in this file for authorization. If API Tokens are not supported by the InfluxDB version in use, `INFLUXDB_CREDENTIALS_FILE` must be provided instead.
 `INFLUXDB_ORGANIZATION` | | Required when using `INFLUXDB_API_TOKEN`; e.g. `personal`.
 `INFLUXDB_BUCKET` | | Required when using `INFLUXDB_API_TOKEN`; e.g. `backup_metrics`
-`INFLUXDB_CREDENTIALS` |  | When provided, backup metrics will be sent to an InfluxDB instance using `user:password` authentication. This is required if `INFLUXDB_API_TOKEN` not provided.
+`INFLUXDB_CREDENTIALS` |  | When provided, backup metrics will be sent to an InfluxDB instance using `user:password` authentication. Either `INFLUXDB_CREDENTIALS` or `INFLUXDB_CREDENTIALS_FILE` is required if `INFLUXDB_API_TOKEN` not provided.
+`INFLUXDB_CREDENTIALS_FILE` |  | When provided, backup metrics will be sent to an InfluxDB instance using `user:password` authentication. Either `INFLUXDB_CREDENTIALS` or `INFLUXDB_CREDENTIALS_FILE` is required if `INFLUXDB_API_TOKEN` not provided.
 `INFLUXDB_DB` |  | Required when using `INFLUXDB_URL`; e.g. `my_database`.
 `TZ` | `UTC` | Which timezone should `cron` use, e.g. `America/New_York` or `Europe/Warsaw`. See [full list of available time zones](http://manpages.ubuntu.com/manpages/bionic/man3/DateTime::TimeZone::Catalog.3pm.html).
 
@@ -350,8 +312,9 @@ A bunch of test cases exist under [`test`](test/). To run them:
 
 Some cases may need secrets available in the environment, e.g. for S3 uploads to work.
 
-## Releasing
+## Building
 
-1. [Draft a new release on GitHub](https://github.com/jareware/docker-volume-backup/releases/new)
-1. `docker buildx build --platform linux/amd64,linux/arm64 -t jareware/docker-volume-backup:latest --push .`
-1. `docker buildx build --platform linux/amd64,linux/arm64 -t jareware/docker-volume-backup:x.y.z --push .`
+<!--
+1. [Draft a new release on GitHub](https://github.com/1121citrus/docker-volume-backup/releases/new)
+-->
+1. `docker buildx build --platform linux/amd64,linux/arm64 -t 1121citrus/docker-volume-backup:latest -t 1121citrus/docker-volume-backup:x.y.z .`
