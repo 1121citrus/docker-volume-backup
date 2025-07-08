@@ -1,6 +1,25 @@
 # 1121citrus/docker-volume-backup
 
-**This is a fork of [`jareware/docker-volume-backup`](https://www.github.com/jareware/docker-volume-backup).** It adds support for passing credentials and private keys using [secrets](https://docs.docker.com/engine/swarm/secrets/#use-secrets-in-compose).
+## Synopsis
+**This is a fork of [`jareware/docker-volume-backup`](https://www.github.com/jareware/docker-volume-backup).** It adds support for passing credentials and private keys using [secrets](https://docs.docker.com/engine/swarm/secrets/#use-secrets-in-compose) using new `AWS_ACCESS_KEY_ID_FILE`, `AWS_SECRET_ACCESS_KEY_FILE`, `GPG_PASSPHRASE_FILE`, `INFLUXDB_API_TOKEN_FILE`, and `INFLUXDB_CREDENTIALS_FILE` configuration variables. In each case the value of the `_FILE` form provides a default value for the ordinary variable. (i.e. `foo=${FOO:-$(cat ${FOO_FILE})}` in bash).
+
+## Contents
+- [Overview](#overview)
+- [Examples](#examples)
+  - [Backing up locally](#backing-up-locally)
+  - [Backing up to S3](#backing-up-to-s3)
+  - [Backing up to remote host by means of SCP](#backing-up-to-remote-host-by-means-of-scp)
+  - [Triggering a backup manually](#triggering-a-backup-manually)
+  - [Stopping containers while backing up](#stopping-containers-while-backing-up)
+  - [Pre/post backup exec](#prepost-backup-exec)
+- [Configuration](#configuration)
+- [Metrics](#metrics)
+- [Automatic backup rotation](#automatic-backup-rotation)
+    - [Rotation for local backups](#rotation-for-local-backups)
+    - [Rotation for backups tranferred via SCP](#rotation-for-backups-tranferred-via-scp)
+    - [Rotation for S3 backups](#rotation-for-s3-backups)
+- [Testing](#testing)
+- [Building](#building)
 
 ## Overview
 
